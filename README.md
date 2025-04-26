@@ -1,0 +1,1 @@
+A library to be able to send and receive ESP AT commands using an STM32. This library uses UART DMA to be able to receive data from the ESP without impacting performance. In the main program loop, incoming data is checked to see if a message from a remote host is incoming.
