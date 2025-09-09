@@ -10,23 +10,13 @@
 
 #include "stm32g0xx_hal.h"
 #include "usart.h"
+#include "../settings.h"
 
-#define AT_SHORT_TIMEOUT 250
-#define AT_MEDIUM_TIMEOUT 500
+typedef uint8_t bool;
+#define true 1
+#define false 0
 
-#define RESPONSE_MAX_SIZE 1024
-#define REQUEST_MAX_SIZE 256
-#define WIFI_BUF_MAX_SIZE 800
-#define HOSTNAME_MAX_SIZE 32	// ESPDEVICExxx
-#define NAME_MAX_SIZE 32		// human-readable name
-
-#define UART_BUFFER_SIZE 2048
-#define UART_TX_TIMEOUT 500	// ms
-#define UART_RX_IDLE_TIMEOUT 3000	// ms
-#define STM_UART huart1
-
-#define ESP_RST_PORT ESPRST_GPIO_Port
-#define ESP_RST_PIN ESPRST_Pin
+extern bool WIFI_response_sent;
 
 typedef enum
 {
@@ -40,6 +30,7 @@ typedef enum
 	TIMEOUT 	= 1,
 	OK 			= 2,
 	NULVAL		= 3,
+	WAITING		= 4,
 } Response_t;
 
 typedef struct
@@ -86,7 +77,7 @@ Response_t WIFI_Connect(WIFI_t* wifi);
 Response_t WIFI_GetConnectionInfo(WIFI_t* wifi);
 Response_t WIFI_SetCWMODE(char* mode);
 Response_t WIFI_SetCIPMUX(char* mux);
-Response_t WIFI_SetCIPSERVER(char* server_port);
+Response_t WIFI_SetCIPSERVER(uint16_t server_port);
 Response_t WIFI_SetHostname(WIFI_t* wifi, char* hostname);
 Response_t WIFI_GetHostname(WIFI_t* wifi);
 Response_t WIFI_SetName(WIFI_t* wifi, char* name);
@@ -101,6 +92,7 @@ uint32_t WIFI_GetTimeSeconds(WIFI_t* wifi);
 Response_t WIFI_ReceiveRequest(WIFI_t* wifi, Connection_t* conn, uint32_t timeout);
 Response_t WIFI_SendResponse(Connection_t* conn, char* status_code, char* body, uint32_t body_length);
 Response_t WIFI_EnableNTPServer(WIFI_t* wifi, int8_t time_offset);
+void WIFI_ResetComm(WIFI_t* wifi, Connection_t* conn);
 char* WIFI_RequestHasKey(Connection_t* conn, char* desired_key);
 char* WIFI_RequestKeyHasValue(Connection_t* conn, char* request_key_ptr, char* value);
 char* WIFI_GetKeyValue(Connection_t* conn, char* request_key_ptr, uint32_t* value_size);

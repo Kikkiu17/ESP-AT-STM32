@@ -6,12 +6,22 @@
  */
 
 #include "esp8266.h"
+#include "../Flash/flash.h"
 #include <string.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <time.h>
 
 char uart_buffer[UART_BUFFER_SIZE];
+bool WIFI_response_sent = false;
+
+void WIFI_ResetComm(WIFI_t* wifi, Connection_t* conn)
+{
+	ESP8266_ClearBuffer();
+	memset(wifi->buf, 0, WIFI_BUF_MAX_SIZE);
+	memset(conn->request, 0, REQUEST_MAX_SIZE);
+	memset(conn->response_buffer, 0, RESPONSE_MAX_SIZE);
+}
 
 int32_t bufferToInt(char* buf, uint32_t size)
 {
@@ -289,17 +299,14 @@ Response_t WIFI_SetCIPMUX(char* mux)
 	return ESP8266_SendATCommandResponse(cipmux, 13, AT_SHORT_TIMEOUT);
 }
 
-Response_t WIFI_SetCIPSERVER(char* server_port)
+Response_t WIFI_SetCIPSERVER(uint16_t server_port)
 {
-	if (server_port == NULL) return NULVAL;
-
-	uint32_t int_server_port = 0;
 	// for some reason ESP AT doesn't receive connections if the server port is 80
-	if (sscanf(server_port, "%" PRIu32, &int_server_port) != 1 || int_server_port < 1 || int_server_port > 65535 || int_server_port == 80)
+	if (server_port < 1 || server_port > 65535 || server_port == 80)
 		return ERR;
 
 	char cipserver[50];
-	sprintf(cipserver, "AT+CIPSERVER=1,%s\r\n", server_port);
+	sprintf(cipserver, "AT+CIPSERVER=1,%d\r\n", server_port);
 	return ESP8266_SendATCommandResponse(cipserver, strlen(cipserver), AT_SHORT_TIMEOUT);
 }
 
@@ -307,16 +314,19 @@ Response_t WIFI_SetHostname(WIFI_t* wifi, char* hostname)
 {
 	if (wifi == NULL || hostname == NULL) return NULVAL;
 	uint32_t hostname_size = strlen(hostname);
-	char hostnamestr[18 + hostname_size];
-	sprintf(hostnamestr, "AT+CWHOSTNAME=\"%s\"\r\n", hostname);
+
+	char hostnamestr[18 + HOSTNAME_MAX_SIZE];
+	if (hostname_size <= HOSTNAME_MAX_SIZE)
+		snprintf(hostnamestr, hostname_size, "AT+CWHOSTNAME=\"%s\"\r\n", hostname);
+	else
+	{
+		snprintf(hostnamestr, HOSTNAME_MAX_SIZE, "AT+CWHOSTNAME=\"%s\"\r\n", hostname);
+		hostname_size = HOSTNAME_MAX_SIZE;
+	}
+
 	Response_t atstatus = ESP8266_SendATCommandResponse(hostnamestr, 18 + hostname_size, AT_SHORT_TIMEOUT);
 	if (atstatus == OK)
-	{
-		if (hostname_size <= HOSTNAME_MAX_SIZE)
-			memcpy(wifi->hostname, hostname, hostname_size);
-		else
-			memcpy(wifi->hostname, hostname, HOSTNAME_MAX_SIZE);
-	}
+		memcpy(wifi->hostname, hostname, hostname_size);
 	return atstatus;
 }
 
@@ -345,6 +355,7 @@ Response_t WIFI_GetHostname(WIFI_t* wifi)
 	return OK;
 }
 
+// also saves the name in FLASH memory
 Response_t WIFI_SetName(WIFI_t* wifi, char* name)
 {
 	if (wifi == NULL) return ERR;
@@ -355,9 +366,15 @@ Response_t WIFI_SetName(WIFI_t* wifi, char* name)
 	if (name == NULL) return NULVAL;
 
 	if (name_size > NAME_MAX_SIZE)
+	{
+		memcpy(savedata.name, name, NAME_MAX_SIZE);
 		memcpy(wifi->name, name, NAME_MAX_SIZE);
+	}
 	else
+	{
+		memcpy(savedata.name, name, name_size);
 		memcpy(wifi->name, name, name_size);
+	}
 
 	return OK;
 }
@@ -386,22 +403,28 @@ Response_t WIFI_ReceiveRequest(WIFI_t* wifi, Connection_t* conn, uint32_t timeou
 	char* ptr = NULL;
 	char* ipd_ptr = NULL;
 
-	if (uart_buffer[0] == '\0')
+	uint32_t start_time = uwTick;
+	while (1)
 	{
-		/**
-		 * the buffer could have been cleared after the first DMA read. if this happens,
-		 * the first item of the DMA buffer will be 0x00. if this is so, check for an incoming
-		 * connection from the second element
-		 */
-		if ((ipd_ptr = strstr(uart_buffer + 1, "+IPD,")) == NULL) return TIMEOUT;
-	}
-	else
-	{
-		/**
-		 * if the first element of the buffer is not 0x00, check for an incoming connection
-		 * from the start
-		 */
-		if ((ipd_ptr = strstr(uart_buffer, "+IPD,")) == NULL) return TIMEOUT;
+		if (uwTick - start_time > timeout) return TIMEOUT;
+
+		if (uart_buffer[0] == '\0')
+		{
+			/**
+			 * the buffer could have been cleared after the first DMA read. if this happens,
+			 * the first item of the DMA buffer will be 0x00. if this is so, check for an incoming
+			 * connection from the second element
+			 */
+			if ((ipd_ptr = strstr(uart_buffer + 1, "+IPD,")) != NULL) break;
+		}
+		else
+		{
+			/**
+			 * if the first element of the buffer is not 0x00, check for an incoming connection
+			 * from the start
+			 */
+			if ((ipd_ptr = strstr(uart_buffer, "+IPD,")) != NULL) break;
+		}
 	}
 
 	/**
@@ -409,21 +432,28 @@ Response_t WIFI_ReceiveRequest(WIFI_t* wifi, Connection_t* conn, uint32_t timeou
 	 * 		   v
 	 * +IPD,n,m:xxxxxxxxxx
 	 */
-	while ((ptr = strstr(ipd_ptr, ":")) == NULL) {}
+	start_time = uwTick;
+	while ((ptr = strstr(ipd_ptr, ":")) == NULL)
+	{
+		if (uwTick - start_time > timeout) return TIMEOUT;
+		__asm__("nop");
+	}
 
 	uint32_t expected_size = 0;
-	 //		   v
-	 // +IPD,n,m:xxxxxxxxxx
-	sscanf(ipd_ptr + 7, "%" PRIu32, &expected_size);
+	//		  v-->v
+	// +IPD,n,xxxxx:xxxxxxxxxx
+	char* expected_size_end_p = ptr;
+	uint8_t num_size = expected_size_end_p - (ipd_ptr + 7);
+	expected_size = bufferToInt(ipd_ptr + 7, num_size);
 
-	uint32_t start_time = uwTick;
+	start_time = uwTick;
 	uint32_t string_len = 0;
-	while (string_len != expected_size)
+	while (string_len < expected_size)
 	{
 		// wait until the expected number of bytes m is received
 		if (uwTick - start_time > timeout) return TIMEOUT;
 		string_len = strlen(ptr + 1);
-		if (string_len > expected_size || ptr + 1 - uart_buffer + string_len >= UART_BUFFER_SIZE - 1)
+		if (/*string_len > expected_size || */ptr + 1 - uart_buffer + string_len >= UART_BUFFER_SIZE - 1)
 		{
 			/**
 			 * if more bytes are received than the expected or the buffer is full,
@@ -468,10 +498,9 @@ Response_t WIFI_ReceiveRequest(WIFI_t* wifi, Connection_t* conn, uint32_t timeou
 	ptr = strstr(uart_buffer, " HTTP");
 	if (ptr == NULL)
 	{
-		//if ((ptr = strstr(uart_buffer, "+IPD,")) == NULL) return ERR4;
 		// if there is no HTTP/x.x use the message size m (at ptr + 7)
 		// +IPD,n,m:GET ?xxxxxxxxxx
-		sscanf(ipd_ptr + 7, "%" PRIu32, &request_size);
+		request_size = expected_size;
 		uint32_t request_start_index;
 		if ((ptr = strstr(uart_buffer, ":")) == NULL) return ERR;
 		// this removes the "POST " (or "GET ") part
@@ -482,6 +511,9 @@ Response_t WIFI_ReceiveRequest(WIFI_t* wifi, Connection_t* conn, uint32_t timeou
 	}
 	else
 	{
+		// otherwise get this length
+		// 				 v -----> v
+		// +IPD,n,m:GET ?xxxxxxxxxx HTTP....
 		uint32_t request_end_index = (ptr - 1) - uart_buffer;
 		if (request_end_index < request_body_start_index) return ERR;
 		request_size = request_end_index - request_body_start_index + 1;
@@ -498,7 +530,6 @@ Response_t WIFI_ReceiveRequest(WIFI_t* wifi, Connection_t* conn, uint32_t timeou
 Response_t WIFI_SendResponse(Connection_t* conn, char* status_code, char* body, uint32_t body_length)
 {
 	if (conn == NULL || status_code == NULL || body == NULL) return NULVAL;
-	Response_t atstatus = ERR;
 
 	// calculate width in characters of the body length and connection number
 	memset(conn->response_buffer, 0, RESPONSE_MAX_SIZE);
@@ -507,7 +538,7 @@ Response_t WIFI_SendResponse(Connection_t* conn, char* status_code, char* body, 
 	uint32_t status_code_width = strlen(status_code);
 
 	// get length of the entire TCP packet
-	uint32_t total_response_length = 1 + status_code_width + body_length;
+	uint32_t total_response_length = 1 + status_code_width + body_length + 2;	// the last 2 are \r\n as delimiter for the response
 	if (total_response_length > RESPONSE_MAX_SIZE) return ERR;
 
 	// get width in characters of the response length
@@ -529,7 +560,7 @@ Response_t WIFI_SendResponse(Connection_t* conn, char* status_code, char* body, 
 	}
 
 	memset(conn->response_buffer, 0, RESPONSE_MAX_SIZE);
-	sprintf(conn->response_buffer, "%s\n%s", status_code, body);
+	sprintf(conn->response_buffer, "%s\n%s\r\n", status_code, body);
 	HAL_UART_Transmit(&STM_UART, (uint8_t*)conn->response_buffer, total_response_length, UART_TX_TIMEOUT);
 
 	if (ESP8266_WaitForString("Recv", AT_SHORT_TIMEOUT) == TIMEOUT)
@@ -538,7 +569,9 @@ Response_t WIFI_SendResponse(Connection_t* conn, char* status_code, char* body, 
 		HAL_UART_Transmit(&STM_UART, (uint8_t*)conn->response_buffer, total_response_length, UART_TX_TIMEOUT);
 	}
 
-	return atstatus;
+	WIFI_response_sent = true;
+
+	return OK;
 }
 
 Response_t WIFI_GetTime(WIFI_t* wifi)
