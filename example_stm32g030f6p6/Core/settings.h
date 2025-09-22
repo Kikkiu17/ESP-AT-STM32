@@ -8,6 +8,9 @@
 #ifndef SETTINGS_H_
 #define SETTINGS_H_
 
+#include <inttypes.h>
+#include "stm32g0xx.h"
+
 typedef uint8_t bool;
 #define true 1
 #define false 0
@@ -128,7 +131,22 @@ extern SaveData_t savedata;
 // 											OTHER
 // ==========================================================================================
 
-#define START_ATTEMPTS 4
+#define START_ATTEMPTS -1
+
+typedef struct
+{
+	bool pressed;
+	bool inverted;
+	GPIO_TypeDef* port;
+	uint16_t pin;
+	bool manual;
+} Switch_t;
+
+#define NUMBER_OF_SWITCHES 1
+
+#define RELAY_SWITCH 0
+
+extern Switch_t switches[1];
 
 // ==========================================================================================
 // 										COMM TEMPLATE
@@ -169,11 +187,20 @@ extern SaveData_t savedata;
  * 		NOTE: external features will only be updated ONCE, every time the device is loaded in the app.
  */
 
+typedef struct bat
+{
+	uint16_t voltage_mv;
+	uint16_t voltage_integer;
+	uint16_t voltage_decimal;
+
+} Battery_t;
+
+extern Battery_t bat;
+
 static const char FEATURES_TEMPLATE[] =
 {
-		"sensor1$S1$%d;"
-		"sensor2$S2$%d;"
-		"sensor3$S3$%d;"
+		"switch1$Luce,status$%d;"
+		"sensor1$Tensione alimentazione$%d,%dV;"
 };
 
 #endif /* SETTINGS_H_ */

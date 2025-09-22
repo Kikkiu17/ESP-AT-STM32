@@ -141,13 +141,7 @@ int main(void)
 	  }
 
 	  // OPTIONAL
-	  if (!WIFI_response_sent)
-	  {
-		  if (status == ERR || status == NULVAL)
-			  WIFI_ResetComm(&wifi, &conn);
-	  }
-	  else
-		  WIFI_response_sent = false;
+	  WIFI_ResetConnectionIfError(&wifi, &conn, wifistatus);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
