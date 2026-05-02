@@ -57,10 +57,12 @@ typedef uint64_t FLASH_DATATYPE;
 // ==========================================================================================
 // 									NETWORK (esp8266.h)
 // ==========================================================================================
+static const char RADIO_POWER[] = "70";
+
 static const char ESP_NAME[] = "SNSE device";
 #define SERVER_PORT 34677
 
-static const char ESP_HOSTNAME[] = "ESPDEVICE003"; // template: ESPDEVICExxx
+static const char ESP_HOSTNAME[] = "SNSEDEVICE01"; // template: SNSEDEVICExx
 
 #define AT_SHORT_TIMEOUT 250
 #define AT_MEDIUM_TIMEOUT 500
